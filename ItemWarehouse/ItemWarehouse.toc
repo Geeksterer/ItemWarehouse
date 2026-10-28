@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: ItemWarehouse
+## Notes: Text-based inventory and guild bank recorder by Copper.
+## Author: Copper
+## Version: 1.0
+## SavedVariables: ItemWarehouseDB
+
+ItemWarehouse.lua
