@@ -76,7 +76,7 @@ local function ClearDebugLog()
 end
 
 -- ============================================================================
--- DATA SCANNING & NON-DESTRUCTIVE DELTA LOGIC
+-- DATA SCANNING ENGINE (FRESH SCAN MODE)
 -- ============================================================================
 
 local function GetTimestamp()
@@ -95,33 +95,28 @@ local function PrecacheItemLink(link)
     if link then GetItemInfo(link) end
 end
 
--- Non-Destructive Update: Merges new scanned items without dropping existing ones
-local function MergeNonDestructiveScan(sourceKey, scannedItems, scanLocations)
-    ItemWarehouseDB[sourceKey] = ItemWarehouseDB[sourceKey] or { timestamp = GetTimestamp(), items = {} }
+-- Fresh Scan Update: Wipes previous snapshot for source and replaces with active items
+local function PerformFreshScanUpdate(sourceKey, scannedItems, scanLocations)
+    ItemWarehouseDB[sourceKey] = { timestamp = GetTimestamp(), items = {} }
     local sourceData = ItemWarehouseDB[sourceKey]
-    sourceData.items = sourceData.items or {}
-    sourceData.timestamp = GetTimestamp()
 
     local totalItems = 0
-    local changedCount = 0
+    local uniqueTypes = 0
 
     for link, count in pairs(scannedItems) do
-        local prevCount = sourceData.items[link] or 0
-        if prevCount ~= count then
-            changedCount = changedCount + math.abs(count - prevCount)
-        end
         sourceData.items[link] = count
         totalItems = totalItems + count
+        uniqueTypes = uniqueTypes + 1
 
         if scanLocations[link] then
-            DebugLog(string.format("Scan [%s]: %s x%d at (%s)", sourceKey, link, count, scanLocations[link]))
+            DebugLog(string.format("Fresh Scan [%s]: %s x%d at (%s)", sourceKey, link, count, scanLocations[link]))
         end
     end
 
-    return totalItems, changedCount
+    return totalItems, uniqueTypes
 end
 
--- Scan Player Inventory (AUTOMATIC)
+-- Scan Player Inventory (AUTOMATIC FRESH SCAN)
 local function PerformInventoryScan()
     isBagScanPending = false
     local charName = GetCharacterName()
@@ -144,11 +139,8 @@ local function PerformInventoryScan()
         end
     end
 
-    local totalItems, changedCount = MergeNonDestructiveScan(sourceKey, scannedItems, scanLocations)
-
-    if changedCount > 0 then
-        DEFAULT_CHAT_FRAME:AddMessage(format("|cff00ff00ItemWarehouse:|r Inventory scanned (%d total items | %d items changed).", totalItems, changedCount))
-    end
+    local totalItems, uniqueTypes = PerformFreshScanUpdate(sourceKey, scannedItems, scanLocations)
+    DebugLog(format("Inventory fresh scan updated (%d items, %d unique types).", totalItems, uniqueTypes))
 end
 
 local function RequestInventoryScan()
@@ -161,7 +153,7 @@ local function RequestInventoryScan()
     end
 end
 
--- Scan Personal Bank (AUTOMATIC)
+-- Scan Personal Bank (AUTOMATIC FRESH SCAN)
 local function ScanBank()
     local charName = GetCharacterName()
     local sourceKey = charName .. " - Bank"
@@ -195,14 +187,11 @@ local function ScanBank()
         end
     end
 
-    local totalItems, changedCount = MergeNonDestructiveScan(sourceKey, scannedItems, scanLocations)
-
-    if changedCount > 0 then
-        DEFAULT_CHAT_FRAME:AddMessage(format("|cff00ff00ItemWarehouse:|r Personal bank scanned (%d total items | %d items changed).", totalItems, changedCount))
-    end
+    local totalItems, uniqueTypes = PerformFreshScanUpdate(sourceKey, scannedItems, scanLocations)
+    DEFAULT_CHAT_FRAME:AddMessage(format("|cff00ff00ItemWarehouse:|r Personal bank fresh scan complete (%d total items | %d item types).", totalItems, uniqueTypes))
 end
 
--- Manual Scan Function For Active Guild Bank Tab
+-- Manual Fresh Scan For Active Guild Bank Tab
 local function ScanActiveGuildBankTab()
     local gName = GetGuildName()
     if not gName then
@@ -218,6 +207,7 @@ local function ScanActiveGuildBankTab()
 
     local tabName = GetGuildBankTabInfo(currentTab) or ("Tab " .. currentTab)
     
+    -- Wipe previous staging for active tab before reading contents
     guildTabStaging[currentTab] = {}
     local tabItemCount = 0
     local uniqueTypes = 0
@@ -236,7 +226,7 @@ local function ScanActiveGuildBankTab()
         end
     end
 
-    DebugLog(format("Manual Scan: Guild Tab [%s] read %d total items across %d unique item types.", tabName, tabItemCount, uniqueTypes))
+    DebugLog(format("Fresh Tab Scan: Guild Tab [%s] recorded %d items across %d unique types.", tabName, tabItemCount, uniqueTypes))
 
     local sourceKey = "[Guild Bank] " .. gName
     local aggregateItems = {}
@@ -250,9 +240,9 @@ local function ScanActiveGuildBankTab()
         end
     end
 
-    local totalItems, changedCount = MergeNonDestructiveScan(sourceKey, aggregateItems, scanLocations)
+    local totalItems, totalUnique = PerformFreshScanUpdate(sourceKey, aggregateItems, scanLocations)
 
-    DEFAULT_CHAT_FRAME:AddMessage(format("|cff00ff00ItemWarehouse:|r Scanned Guild Bank [%s] (%d items in tab | %d total across stored tabs).", tabName, tabItemCount, totalItems))
+    DEFAULT_CHAT_FRAME:AddMessage(format("|cff00ff00ItemWarehouse:|r Fresh scan complete for Guild Bank [%s] (%d items in tab | %d total stored across scanned tabs).", tabName, tabItemCount, totalItems))
 end
 
 -- Attach Manual Scan Button to GuildBankFrame
@@ -270,9 +260,9 @@ local function AttachGuildBankButton()
 
     guildBankScanBtn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:AddLine("ItemWarehouse Scan", 0, 1, 0)
-        GameTooltip:AddLine("Click to record all items and stack sizes", 1, 1, 1)
-        GameTooltip:AddLine("currently visible in this Guild Bank tab.", 0.8, 0.8, 0.8)
+        GameTooltip:AddLine("ItemWarehouse Fresh Scan", 0, 1, 0)
+        GameTooltip:AddLine("Click to perform a fresh scan of all items", 1, 1, 1)
+        GameTooltip:AddLine("and stack sizes currently in this tab.", 0.8, 0.8, 0.8)
         GameTooltip:Show()
     end)
 
