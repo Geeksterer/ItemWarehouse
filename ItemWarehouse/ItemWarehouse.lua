@@ -89,7 +89,7 @@ local function ClearDebugLog()
 end
 
 -- ============================================================================
--- DATA SCANNING ENGINE (FRESH SCAN MODE)
+-- DATA SCANNING ENGINE
 -- ============================================================================
 
 local function GetTimestamp()
@@ -108,7 +108,7 @@ local function PrecacheItemLink(link)
     if link then GetItemInfo(link) end
 end
 
--- Fresh Scan Update: Wipes previous snapshot for source and replaces with active items
+-- Fresh Scan Update for Player Inventory & Bank (Wipes stale items)
 local function PerformFreshScanUpdate(sourceKey, scannedItems, scanLocations)
     ItemWarehouseDB[sourceKey] = { timestamp = GetTimestamp(), items = {} }
     local sourceData = ItemWarehouseDB[sourceKey]
@@ -209,7 +209,7 @@ local function ScanBank()
     DEFAULT_CHAT_FRAME:AddMessage(format("|cff00ff00ItemWarehouse:|r Personal bank fresh scan complete (%d total items | %d item types).", totalItems, uniqueTypes))
 end
 
--- Manual Fresh Scan For Active Guild Bank Tab
+-- Manual Tab Scan for Guild Bank (Refreshes Active Tab, Preserves Other Staged Tabs)
 local function ScanActiveGuildBankTab()
     if not ItemWarehouseDB or ItemWarehouseDB.enabled == false then
         DEFAULT_CHAT_FRAME:AddMessage("|cffff0000ItemWarehouse:|r Addon is disabled in config.")
@@ -230,6 +230,7 @@ local function ScanActiveGuildBankTab()
 
     local tabName = GetGuildBankTabInfo(currentTab) or ("Tab " .. currentTab)
     
+    -- Completely refresh/overwrite staging for this specific tab only
     guildTabStaging[currentTab] = {}
     local tabItemCount = 0
     local uniqueTypes = 0
@@ -248,9 +249,13 @@ local function ScanActiveGuildBankTab()
         end
     end
 
-    DebugLog(format("Fresh Tab Scan: Guild Tab [%s] recorded %d items across %d unique types.", tabName, tabItemCount, uniqueTypes))
+    DebugLog(format("Tab Refresh: Guild Tab [%s] recorded %d items across %d unique types.", tabName, tabItemCount, uniqueTypes))
 
+    -- Consolidate all staged tabs into master Guild Bank database entry
     local sourceKey = "[Guild Bank] " .. gName
+    ItemWarehouseDB[sourceKey] = { timestamp = GetTimestamp(), items = {} }
+    local sourceData = ItemWarehouseDB[sourceKey]
+
     local aggregateItems = {}
     local scanLocations = {}
 
@@ -262,9 +267,16 @@ local function ScanActiveGuildBankTab()
         end
     end
 
-    local totalItems, totalUnique = PerformFreshScanUpdate(sourceKey, aggregateItems, scanLocations)
+    local totalItems = 0
+    for link, count in pairs(aggregateItems) do
+        sourceData.items[link] = count
+        totalItems = totalItems + count
+        if scanLocations[link] then
+            DebugLog(format("Guild Bank Aggregate [%s]: %s x%d at (%s)", sourceKey, link, count, scanLocations[link]))
+        end
+    end
 
-    DEFAULT_CHAT_FRAME:AddMessage(format("|cff00ff00ItemWarehouse:|r Fresh scan complete for Guild Bank [%s] (%d items in tab | %d total stored across scanned tabs).", tabName, tabItemCount, totalItems))
+    DEFAULT_CHAT_FRAME:AddMessage(format("|cff00ff00ItemWarehouse:|r Refreshed Guild Bank [%s] (%d items in tab | %d total stored across scanned tabs).", tabName, tabItemCount, totalItems))
 end
 
 -- Attach Manual Scan Button to GuildBankFrame
@@ -282,9 +294,9 @@ local function AttachGuildBankButton()
 
     guildBankScanBtn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:AddLine("ItemWarehouse Fresh Scan", 0, 1, 0)
-        GameTooltip:AddLine("Click to perform a fresh scan of all items", 1, 1, 1)
-        GameTooltip:AddLine("and stack sizes currently in this tab.", 0.8, 0.8, 0.8)
+        GameTooltip:AddLine("ItemWarehouse Tab Refresh", 0, 1, 0)
+        GameTooltip:AddLine("Click to refresh items and stack sizes", 1, 1, 1)
+        GameTooltip:AddLine("for this specific Guild Bank tab.", 0.8, 0.8, 0.8)
         GameTooltip:Show()
     end)
 
@@ -1129,7 +1141,7 @@ SlashCmdList["ITEMWAREHOUSE"] = function(msg)
         ItemWarehouseDB = { minimapPos = ItemWarehouseDB.minimapPos, debugLog = {}, enabled = ItemWarehouseDB.enabled, debugMode = ItemWarehouseDB.debugMode }
         guildTabStaging = {}
         DEFAULT_CHAT_FRAME:AddMessage("|cffff0000ItemWarehouse: All stored scan data purged.|r")
-        if mainFrame:IsShown() then mainFrame.ShowSourcePanel() end
+        if mainFrame and mainFrame:IsShown() then mainFrame.ShowSourcePanel() end
     else
         if mainFrame:IsShown() then mainFrame:Hide() else mainFrame:Show() mainFrame.ShowSourcePanel() end
     end
