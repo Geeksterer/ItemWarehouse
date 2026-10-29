@@ -32,12 +32,20 @@ local bagScanTimerFrame = CreateFrame("Frame")
 local isBagScanPending = false
 local guildTabStaging = {} -- Per-tab cache: guildTabStaging[tabNum] = { [link] = count }
 
+-- Helper to Get Version from TOC
+local function GetAddonVersion()
+    return GetAddOnMetadata(ADDON_NAME, "Version") or "1.1"
+end
+
 -- ============================================================================
 -- DEBUG LOGGING ENGINE
 -- ============================================================================
 
 local function DebugLog(msg)
     if not ItemWarehouseDB then return end
+    -- Suppress logging if addon or debug mode is disabled
+    if ItemWarehouseDB.enabled == false or not ItemWarehouseDB.debugMode then return end
+
     ItemWarehouseDB.debugLog = ItemWarehouseDB.debugLog or {}
     local t = date("%Y-%m-%d %H:%M:%S")
     table.insert(ItemWarehouseDB.debugLog, string.format("[%s] %s", t, tostring(msg)))
@@ -51,14 +59,19 @@ local function DebugLog(msg)
     end
 end
 
-local function GetDebugSizeString()
+local function GetDebugSizeBytes()
     if not ItemWarehouseDB or not ItemWarehouseDB.debugLog then
-        return "0.00 KB"
+        return 0
     end
     local bytes = 0
     for _, line in ipairs(ItemWarehouseDB.debugLog) do
         bytes = bytes + string.len(line) + 1
     end
+    return bytes
+end
+
+local function GetDebugSizeString()
+    local bytes = GetDebugSizeBytes()
     if bytes >= 1048576 then
         return string.format("%.2f MB", bytes / 1048576)
     else
@@ -119,6 +132,8 @@ end
 -- Scan Player Inventory (AUTOMATIC FRESH SCAN)
 local function PerformInventoryScan()
     isBagScanPending = false
+    if not ItemWarehouseDB or ItemWarehouseDB.enabled == false then return end
+
     local charName = GetCharacterName()
     local sourceKey = charName .. " - Inventory"
     
@@ -144,6 +159,7 @@ local function PerformInventoryScan()
 end
 
 local function RequestInventoryScan()
+    if not ItemWarehouseDB or ItemWarehouseDB.enabled == false then return end
     if not isBagScanPending then
         isBagScanPending = true
         bagScanTimerFrame:SetScript("OnUpdate", function(self, elapsed)
@@ -155,6 +171,8 @@ end
 
 -- Scan Personal Bank (AUTOMATIC FRESH SCAN)
 local function ScanBank()
+    if not ItemWarehouseDB or ItemWarehouseDB.enabled == false then return end
+
     local charName = GetCharacterName()
     local sourceKey = charName .. " - Bank"
     
@@ -193,6 +211,11 @@ end
 
 -- Manual Fresh Scan For Active Guild Bank Tab
 local function ScanActiveGuildBankTab()
+    if not ItemWarehouseDB or ItemWarehouseDB.enabled == false then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffff0000ItemWarehouse:|r Addon is disabled in config.")
+        return
+    end
+
     local gName = GetGuildName()
     if not gName then
         DEFAULT_CHAT_FRAME:AddMessage("|cffff0000ItemWarehouse:|r Guild name not detected.")
@@ -207,7 +230,6 @@ local function ScanActiveGuildBankTab()
 
     local tabName = GetGuildBankTabInfo(currentTab) or ("Tab " .. currentTab)
     
-    -- Wipe previous staging for active tab before reading contents
     guildTabStaging[currentTab] = {}
     local tabItemCount = 0
     local uniqueTypes = 0
@@ -412,14 +434,12 @@ local function CreateExportModal()
         end)
 
         if useSheet then
-            -- Excel / Spreadsheet Tab-Delimited Format (ITEM <TAB> QUANTITY)
             for _, link in ipairs(sortedLinks) do
                 local cleanName = GetCleanItemName(link)
                 local count = itemsTable[link]
                 table.insert(lines, format("%s\t%d", cleanName, count))
             end
         elseif useDiscord then
-            -- Discord Bullet Point Markdown Format
             table.insert(lines, format("**%s**", currentSourceKey))
             for _, link in ipairs(sortedLinks) do
                 local cleanName = GetCleanItemName(link)
@@ -427,7 +447,6 @@ local function CreateExportModal()
                 table.insert(lines, format("* %s x%d", cleanName, count))
             end
         else
-            -- Plain Text Format
             table.insert(lines, format("Source: %s", currentSourceKey))
             table.insert(lines, "--------------------------------------------------")
             for _, link in ipairs(sortedLinks) do
@@ -540,8 +559,8 @@ local function CreateOptionsPanel()
     if optionsPanel then return end
 
     local f = CreateFrame("Frame", "ItemWarehouseOptionsFrame", UIParent)
-    f:SetWidth(360)
-    f:SetHeight(320)
+    f:SetWidth(380)
+    f:SetHeight(360)
     f:SetPoint("CENTER", 0, 0)
     f:SetBackdrop({
         bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -572,31 +591,80 @@ local function CreateOptionsPanel()
     local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", -5, -5)
 
+    -- 1. Enable Addon Checkbox (Positioned at Very Top)
+    local enabledCheck = CreateFrame("CheckButton", "IW_ConfigEnabledCheck", f, "UICheckButtonTemplate")
+    enabledCheck:SetPoint("TOPLEFT", 25, -45)
+    _G[enabledCheck:GetName() .. "Text"]:SetText("Enable ItemWarehouse addon.")
+    enabledCheck:SetScript("OnClick", function(self)
+        local isChecked = self:GetChecked()
+        ItemWarehouseDB.enabled = isChecked
+        if isChecked then
+            DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[ItemWarehouse]|r Addon enabled.")
+            DebugLog("Addon enabled.")
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cffff0000[ItemWarehouse]|r Addon disabled.")
+        end
+    end)
+
+    -- Purge Stored Data Button
     local purgeBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    purgeBtn:SetPoint("TOP", 0, -45)
+    purgeBtn:SetPoint("TOP", 0, -85)
     purgeBtn:SetWidth(220)
     purgeBtn:SetHeight(24)
     purgeBtn:SetText("Purge All Stored Data")
     purgeBtn:SetScript("OnClick", function()
-        ItemWarehouseDB = { minimapPos = ItemWarehouseDB.minimapPos, debugLog = {} }
+        ItemWarehouseDB = { minimapPos = ItemWarehouseDB.minimapPos, debugLog = {}, enabled = ItemWarehouseDB.enabled, debugMode = ItemWarehouseDB.debugMode }
         guildTabStaging = {}
         DEFAULT_CHAT_FRAME:AddMessage("|cffff0000ItemWarehouse: All stored scan data purged.|r")
         if mainFrame and mainFrame:IsShown() then mainFrame.ShowSourcePanel() end
     end)
 
+    -- 2. Enable Debug Mode Checkbox
+    local debugCheck = CreateFrame("CheckButton", "IW_ConfigDebugCheck", f, "UICheckButtonTemplate")
+    debugCheck:SetPoint("TOPLEFT", 25, -125)
+    _G[debugCheck:GetName() .. "Text"]:SetText("Enable Debug Mode")
+    debugCheck:SetScript("OnClick", function(self)
+        local isChecked = self:GetChecked()
+        ItemWarehouseDB.debugMode = isChecked
+        if isChecked then
+            DebugLog("Debug mode enabled.")
+            DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[ItemWarehouse]|r Debug mode enabled.")
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cffff0000[ItemWarehouse]|r Debug mode disabled.")
+        end
+        ItemWarehouse:UpdateDebugSizeDisplay()
+    end)
+
+    -- Debug Size Label
     local debugSizeText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    debugSizeText:SetPoint("TOP", purgeBtn, "BOTTOM", 0, -20)
+    debugSizeText:SetPoint("TOPLEFT", 25, -160)
     debugSizeText:SetText("Debug Log Data: 0.00 KB")
+
+    -- 3. Memory Warning Notice
+    local debugWarnText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    debugWarnText:SetPoint("TOPLEFT", 25, -180)
+    debugWarnText:SetWidth(330)
+    debugWarnText:SetJustifyH("LEFT")
+    debugWarnText:SetText("")
 
     function ItemWarehouse:UpdateDebugSizeDisplay()
         if debugSizeText then
-            debugSizeText:SetText("Debug Log Data: " .. GetDebugSizeString())
+            local sizeStr = GetDebugSizeString()
+            debugSizeText:SetText("Debug Log Data: " .. sizeStr)
+
+            local bytes = GetDebugSizeBytes()
+            if bytes >= 1048576 then -- Over 1MB
+                debugWarnText:SetText("|cffff0000Warning: Debug log size exceeds 1.00 MB! Please clear or purge debug data to maintain client performance.|r")
+            else
+                debugWarnText:SetText("|cff888888Notice: Clear debug data periodically if usage gets too high.|r")
+            end
         end
     end
 
+    -- View Debug Log Button
     local viewDebugBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    viewDebugBtn:SetPoint("TOPLEFT", 25, -120)
-    viewDebugBtn:SetWidth(145)
+    viewDebugBtn:SetPoint("TOPLEFT", 25, -235)
+    viewDebugBtn:SetWidth(150)
     viewDebugBtn:SetHeight(24)
     viewDebugBtn:SetText("View Debug Log")
     viewDebugBtn:SetScript("OnClick", function()
@@ -604,16 +672,30 @@ local function CreateOptionsPanel()
         if debugFrame:IsShown() then debugFrame:Hide() else debugFrame:Show() end
     end)
 
+    -- Clear Debug Log Button
     local clearDebugBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    clearDebugBtn:SetPoint("TOPRIGHT", -25, -120)
-    clearDebugBtn:SetWidth(145)
+    clearDebugBtn:SetPoint("TOPRIGHT", -25, -235)
+    clearDebugBtn:SetWidth(150)
     clearDebugBtn:SetHeight(24)
     clearDebugBtn:SetText("Clear Debug Log")
     clearDebugBtn:SetScript("OnClick", function() ClearDebugLog() end)
 
+    -- 4. Version Footer Notice on Config Panel
+    local configVersionText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    configVersionText:SetPoint("BOTTOMRIGHT", -20, 15)
+    configVersionText:SetText(format("|cff808080ItemWarehouse v%s|r", GetAddonVersion()))
+
     f:SetScript("OnShow", function()
         if mainFrame and mainFrame:IsShown() then mainFrame:Hide() end
         if debugFrame and debugFrame:IsShown() then debugFrame:Hide() end
+
+        if enabledCheck then
+            enabledCheck:SetChecked(ItemWarehouseDB and ItemWarehouseDB.enabled ~= false)
+        end
+        if debugCheck then
+            debugCheck:SetChecked(ItemWarehouseDB and ItemWarehouseDB.debugMode or false)
+        end
+
         ItemWarehouse:UpdateDebugSizeDisplay()
     end)
 end
@@ -698,6 +780,11 @@ local function CreateMainUI()
     configBtn:SetPoint("BOTTOMLEFT", 20, 16)
     configBtn:SetText("Config Panel")
     mainFrame.configBtn = configBtn
+
+    -- 4. Version Footer Notice on Main Dashboard Panel
+    local mainVersionText = mainFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    mainVersionText:SetPoint("BOTTOMRIGHT", -20, 15)
+    mainVersionText:SetText(format("|cff808080ItemWarehouse v%s|r", GetAddonVersion()))
 
     local contentBox = CreateFrame("Frame", nil, mainFrame)
     contentBox:SetWidth(680)
@@ -867,7 +954,9 @@ local function CreateMainUI()
 
         local sources = {}
         for key in pairs(ItemWarehouseDB) do
-            if key ~= "minimapPos" and key ~= "debugLog" then table.insert(sources, key) end
+            if key ~= "minimapPos" and key ~= "debugLog" and key ~= "enabled" and key ~= "debugMode" then 
+                table.insert(sources, key) 
+            end
         end
         table.sort(sources)
 
@@ -999,8 +1088,15 @@ eventFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 
 eventFrame:SetScript("OnEvent", function(self, event, arg1)
     if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
+        if ItemWarehouseDB.enabled == nil then
+            ItemWarehouseDB.enabled = true
+        end
+        if ItemWarehouseDB.debugMode == nil then
+            ItemWarehouseDB.debugMode = false
+        end
+
         CreateMinimapButton()
-        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00ItemWarehouse addon by Copper loaded. Left-click minimap or type /iw to open.|r")
+        DEFAULT_CHAT_FRAME:AddMessage(format("|cff00ff00ItemWarehouse v%s by Copper loaded. Left-click minimap or type /iw to open.|r", GetAddonVersion()))
     elseif event == "BAG_UPDATE" then
         RequestInventoryScan()
     elseif event == "BANKFRAME_OPENED" then
@@ -1030,7 +1126,7 @@ SlashCmdList["ITEMWAREHOUSE"] = function(msg)
         CreateDebugFrame()
         if debugFrame:IsShown() then debugFrame:Hide() else debugFrame:Show() end
     elseif cmd == "purge" then
-        ItemWarehouseDB = { minimapPos = ItemWarehouseDB.minimapPos, debugLog = {} }
+        ItemWarehouseDB = { minimapPos = ItemWarehouseDB.minimapPos, debugLog = {}, enabled = ItemWarehouseDB.enabled, debugMode = ItemWarehouseDB.debugMode }
         guildTabStaging = {}
         DEFAULT_CHAT_FRAME:AddMessage("|cffff0000ItemWarehouse: All stored scan data purged.|r")
         if mainFrame:IsShown() then mainFrame.ShowSourcePanel() end
